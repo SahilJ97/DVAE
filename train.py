@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from numpy.random import uniform
 from numpy.random import normal
+from tensorflow import keras
 
 _step = 0
 _epoch = 0
@@ -28,7 +29,8 @@ def noiseless_batch():
         _epoch += 1
         _step = 0
     if _epoch < TRAINING_EPOCHS:
-        return np.reshape(train_images[_step*BATCH_SIZE:(_step+1)*BATCH_SIZE], BATCH_SHAPE)
+        _step += 1
+        return np.reshape(train_images[(_step-1)*BATCH_SIZE:(_step)*BATCH_SIZE], BATCH_SHAPE)
     return None
 
 
@@ -63,13 +65,13 @@ variances = tf.square(standard_errors)
 # generate a tensor from the standard normal distribution, and transform it in accordance with 'means' and 'variances'
 r = tf.random_normal(shape=(BATCH_SIZE, LATENT_SPACE_DIM), dtype=tf.float64)
 z = tf.add(tf.multiply(r, standard_errors), means)
-batch_size = tf.Variable(BATCH_SIZE, dtype=tf.float64)
-ones = tf.Variable(np.ones(LATENT_SPACE_DIM), dtype=tf.float64)
-half = tf.Variable(.5, dtype=tf.float64)
+ones = tf.constant(np.ones(LATENT_SPACE_DIM), dtype=tf.float64)
+half = tf.constant(.5, dtype=tf.float64)
 
-elbo = tf.cast(tf.losses.mean_squared_error(dvae.encode(z), x), tf.float64)
-kl_divergence = tf.scalar_mul(half, tf.reduce_mean(
-    tf.subtract(tf.subtract(tf.add(variances, means), tf.log(variances), ones))))
+elbo = tf.cast(tf.losses.mean_squared_error(dvae.decode(z), x), tf.float64)
+kl_divergence = tf.scalar_mul(half, tf.reduce_sum(
+    tf.subtract(tf.subtract(tf.add(variances, means), tf.log(variances)), ones)))
+kl_divergence = tf.minimum(kl_divergence, tf.constant(MAX_KL, dtype=tf.float64))
 cost = tf.add(elbo, kl_divergence)
 
 train_step = tf.train.GradientDescentOptimizer(learning_rate=LEARNING_RATE).minimize(cost)
@@ -78,9 +80,14 @@ train_step = tf.train.GradientDescentOptimizer(learning_rate=LEARNING_RATE).mini
 if __name__ == '__main__':
     level = 1
     with tf.Session() as sess:
-        sess.run(tf.initialize_all_variables())
+        init_op = tf.global_variables_initializer()
+        sess.run(init_op)
         while _epoch < TRAINING_EPOCHS:
             noisy_input, noiseless_input = batch(level)
-            _elbo_, _kl_, _ = sess.run([elbo, kl_divergence, train_step],
+            _means_, _se_, _elbo_, _kl_, _ = sess.run([means, standard_errors, elbo, kl_divergence, train_step],
                                        feed_dict={x_noisy: noisy_input, x: noiseless_input})
             print('EPOCH {} STEP {}\tELBO: {}, KL-Divergence: {}'.format(_epoch, _step, _elbo_, _kl_))
+            if _step%30 == 0:
+                print(_means_)
+                print(_se_)
+

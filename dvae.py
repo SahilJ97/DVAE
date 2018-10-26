@@ -16,5 +16,5 @@ def decode(z):
     # z:        latent variable
     with tf.variable_scope('decoder', reuse=tf.AUTO_REUSE):
         hidden_layer_1 = tf.nn.softplus(tf.layers.dense(inputs=z, units=HID_LAYER_SIZE))
-        hidden_layer_2 = tf.sigmoid(tf.layers.dense(inputs=hidden_layer_1, units=HID_LAYER_SIZE))
+        hidden_layer_2 = tf.sigmoid(tf.layers.dense(inputs=hidden_layer_1, units=BATCH_SHAPE[1]))
         return hidden_layer_2

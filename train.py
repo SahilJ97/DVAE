@@ -21,6 +21,8 @@ np.save('test_images', test_images)
 
 train_images = np.load('train_images.npy')
 test_images = np.load('test_images.npy')
+test_images = np.reshape(test_images, (len(test_images), -1))
+test_shape = np.shape(test_images)
 
 
 def noiseless_batch():
@@ -34,20 +36,29 @@ def noiseless_batch():
     return None
 
 
+def get_learning_rate():
+    for i in range(len(EPOCH_GROUPS)):
+        if _epoch < sum(EPOCH_GROUPS[:i+1]):
+            return LEARNING_RATES[i]
+    return None
+
+
 def batch(level):
     noiseless = noiseless_batch()
     if noiseless is None:
         return None
-    return inject_input_noise(noiseless, level), noiseless
+    return inject_noise(noiseless, level), noiseless
 
 
 def stochastic_noise(level):
     return uniform(-level, level, LATENT_SPACE_DIM)
 
 
-def inject_input_noise(batch, level):
-    noise = normal(0, level, BATCH_SHAPE)
+def inject_noise(batch, level):
+    shape = np.shape(batch)
+    noise = normal(0, level, shape)
     noisy = np.add(batch, noise)
+    noisy = np.maximum(np.minimum(noisy, np.ones(shape)), np.zeros(shape))  # constrain pixels to [0, 1]
     return noisy
 
 
@@ -65,29 +76,56 @@ variances = tf.square(standard_errors)
 # generate a tensor from the standard normal distribution, and transform it in accordance with 'means' and 'variances'
 r = tf.random_normal(shape=(BATCH_SIZE, LATENT_SPACE_DIM), dtype=tf.float64)
 z = tf.add(tf.multiply(r, standard_errors), means)
+
 ones = tf.constant(np.ones(LATENT_SPACE_DIM), dtype=tf.float64)
 half = tf.constant(.5, dtype=tf.float64)
-
-elbo = tf.cast(tf.losses.mean_squared_error(dvae.decode(z), x), tf.float64)
+reconst_error = tf.cast(tf.losses.mean_squared_error(dvae.decode(z), x), tf.float64)
 kl_divergence = tf.scalar_mul(half, tf.reduce_sum(
     tf.subtract(tf.subtract(tf.add(variances, means), tf.log(variances)), ones)))
-kl_divergence = tf.minimum(kl_divergence, tf.constant(MAX_KL, dtype=tf.float64))
-cost = tf.add(elbo, kl_divergence)
+cost = tf.add(reconst_error, kl_divergence)
+learning_rate = tf.placeholder(dtype=tf.float64, shape=(), name='learning_rate')
+train_step = tf.train.GradientDescentOptimizer(learning_rate=learning_rate).minimize(cost)
 
-train_step = tf.train.GradientDescentOptimizer(learning_rate=LEARNING_RATE).minimize(cost)
+test_noiseless = tf.constant(test_images, dtype=tf.float64)
+test_noisy = tf.placeholder(tf.float64, test_shape)
+
+test_means, test_standard_errors = dvae.encode(test_noisy)
+test_variances = tf.square(test_standard_errors)
+
+# generate a tensor from the standard normal distribution, and transform it in accordance with 'means' and 'variances'
+t_r = tf.random_normal(shape=(test_shape[0], LATENT_SPACE_DIM), dtype=tf.float64)
+t_z = tf.add(tf.multiply(t_r, test_standard_errors), test_means)
+
+t_reconst_error = tf.cast(tf.losses.mean_squared_error(dvae.decode(t_z), test_noiseless), tf.float64)
+t_kl_divergence = tf.scalar_mul(half, tf.reduce_sum(
+    tf.subtract(tf.subtract(tf.add(test_variances, test_means), tf.log(test_variances)), ones)))
 
 
-if __name__ == '__main__':
-    level = 1
+def train(train_nlevel, it):
+    # adjust learning rate each _ epochs!
     with tf.Session() as sess:
         init_op = tf.global_variables_initializer()
         sess.run(init_op)
         while _epoch < TRAINING_EPOCHS:
-            noisy_input, noiseless_input = batch(level)
-            _means_, _se_, _elbo_, _kl_, _ = sess.run([means, standard_errors, elbo, kl_divergence, train_step],
-                                       feed_dict={x_noisy: noisy_input, x: noiseless_input})
-            print('EPOCH {} STEP {}\tELBO: {}, KL-Divergence: {}'.format(_epoch, _step, _elbo_, _kl_))
-            if _step%30 == 0:
-                print(_means_)
-                print(_se_)
+            noisy_input, noiseless_input = batch(train_nlevel)
+            c, _ = sess.run([cost, train_step],
+                               feed_dict={x_noisy: noisy_input, x: noiseless_input, learning_rate: get_learning_rate()})
+            if c == np.inf or c == np.nan:
+                print('KL blowup. Terminating process.')
+                quit()
+            if _step == 1 and _epoch%10 == 0:
+                for test_nlevel in np.arange(0., 1., NOISE_STEP):
+                    _rec_er_, _kl_ = sess.run([t_reconst_error, t_kl_divergence],
+                                              feed_dict={test_noisy: inject_noise(test_images, test_nlevel)})
+                    with open(LOG_FILE, 'a') as file:
+                        file.write('{} {}, {}, {}, {}, {}, {}\n'
+                               .format(train_nlevel, it, test_nlevel,  _epoch, _rec_er_, _kl_, _rec_er_ + _kl_))
+                    # NO, should be evaluating on test set!!!
 
+
+if __name__ == '__main__':
+    with open(LOG_FILE, 'w') as file:
+        file.write('training noise-level and iteration, test noise-level, epoch, reconstruction error, kl-divergence, cost\n')
+    for noise_level in np.arange(0., 1., NOISE_STEP):
+        for i in range(5):
+            train(noise_level, i)

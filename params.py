@@ -8,4 +8,4 @@ TRAINING_EPOCHS = sum(EPOCH_GROUPS)
 NOISE_STEP = .02
 NOISE_BOUND = .501
 LOG_FILE = 'log.csv'
-BETA = 1000
+BETA = 1000  # weighting coefficient for reconstruction error term

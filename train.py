@@ -32,8 +32,8 @@ def inject_noise(batch, level):
 train_images = np.load('train_images.npy')
 test_images = np.load('test_images.npy')
 f = plt.figure()
-plt.imsave('image.png', test_images[0], cmap=plt.get_cmap('gray'))
-plt.imsave('max_noise_image.png', inject_noise(test_images[0], NOISE_BOUND), cmap=plt.get_cmap('gray'))
+plt.imsave('image.png', test_images[2], cmap=plt.get_cmap('gray'))
+plt.imsave('max_noise_image.png', inject_noise(test_images[2], NOISE_BOUND), cmap=plt.get_cmap('gray'))
 plt.close(f)
 test_images = np.reshape(test_images, (len(test_images), -1))
 test_shape = np.shape(test_images)
@@ -75,19 +75,15 @@ means, standard_errors = dvae.encode(x_noisy)
 variances = tf.square(standard_errors)
 
 # generate a tensor from the standard normal distribution, and transform it in accordance with 'means' and 'variances'
-dist = tf.distributions.Normal(0., 1.)
-r = tf.cast(dist.sample((BATCH_SHAPE[0], LATENT_SPACE_DIM)), tf.float64)
+r = tf.placeholder(tf.float64, (BATCH_SHAPE[0], LATENT_SPACE_DIM))
 z = tf.add(tf.multiply(r, standard_errors), means)
 
 ones = tf.constant(np.ones(LATENT_SPACE_DIM), dtype=tf.float64)
 half = tf.constant(.5, dtype=tf.float64)
-reconst_error = tf.cast(tf.losses.mean_squared_error(dvae.decode(z), x), tf.float64)
+reconst_error = tf.cast(tf.losses.mean_squared_error(dvae.decode(z), x), tf.float64)  # THIS NEEDS FIXING!!! LEARNS TO GENERATE ONE IMAGE!
 kl_divergence = tf.scalar_mul(half, tf.reduce_sum(
     tf.subtract(tf.subtract(tf.add(variances, means), tf.log(variances)), ones)))
-#cost = tf.add(tf.multiply(reconst_error, beta), kl_divergence)
-# cost function needs to account for random sampling?!?! yeah, encoder isn't encouraged to be accurate...
-# maybe just measure reconstruction accuracy of mean + se, mean - se ??s use tf.distributions.Normal!!!
-cost = reconst_error
+cost = tf.add(tf.multiply(reconst_error, beta), kl_divergence)
 learning_rate = tf.placeholder(dtype=tf.float64, shape=(), name='learning_rate')
 train_step = tf.train.GradientDescentOptimizer(learning_rate=learning_rate).minimize(cost)
 
@@ -97,15 +93,15 @@ test_noisy = tf.placeholder(tf.float64, test_shape)
 test_means, test_standard_errors = dvae.encode(test_noisy)
 test_variances = tf.square(test_standard_errors)
 
-t_r = tf.random_normal(shape=(test_shape[0], LATENT_SPACE_DIM), dtype=tf.float64)
+t_r = tf.placeholder(tf.float64, (test_shape[0], LATENT_SPACE_DIM))
 t_z = tf.add(tf.multiply(t_r, test_standard_errors), test_means)
 
 t_reconst_error = tf.cast(tf.losses.mean_squared_error(dvae.decode(t_z), test_noiseless), tf.float64)
 t_kl_divergence = tf.scalar_mul(half, tf.reduce_sum(
     tf.subtract(tf.subtract(tf.add(test_variances, test_means), tf.log(test_variances)), ones)))
 
-demo_image = dvae.decode(tf.slice(t_z, (0, 0), (1, LATENT_SPACE_DIM)))
-# instead, demo manifold?
+#demo_image = dvae.decode(tf.slice(t_z, (2, 0), (1, LATENT_SPACE_DIM)))
+demo_image = dvae.decode(tf.constant(np.array([np.zeros(LATENT_SPACE_DIM)]), dtype=tf.float64))
 
 
 def save_demo_image(fname, pixels):
@@ -117,7 +113,8 @@ def save_demo_image(fname, pixels):
 def write_test_performance(ep, it, sess, train_nlevel):
     for test_nlevel in np.arange(0., NOISE_BOUND, NOISE_STEP):
         _rec_er_, _kl_, _demo_ = sess.run([t_reconst_error, t_kl_divergence, demo_image],
-                                  feed_dict={test_noisy: inject_noise(test_images, test_nlevel)})
+                                  feed_dict={test_noisy: inject_noise(test_images, test_nlevel),
+                                             t_r: normal(0., 1., (test_shape[0], LATENT_SPACE_DIM))})
         with open(LOG_FILE, 'a') as file:
             file.write('{} {}, {}, {}, {}, {}, {}\n'
                        .format(train_nlevel, it, test_nlevel, ep, _rec_er_, _kl_, BETA*_rec_er_ + _kl_))
@@ -125,7 +122,6 @@ def write_test_performance(ep, it, sess, train_nlevel):
 
 
 def train(train_nlevel, it):
-    global _epoch, _step
     with tf.Session() as sess:
         init_op = tf.global_variables_initializer()
         sess.run(init_op)
@@ -135,13 +131,13 @@ def train(train_nlevel, it):
                 break
             noisy_input, noiseless_input = b
             c, _ = sess.run([cost, train_step],
-                               feed_dict={x_noisy: noisy_input, x: noiseless_input, learning_rate: get_learning_rate()})
+                               feed_dict={x_noisy: noisy_input, x: noiseless_input, learning_rate: get_learning_rate(),
+                                          r: normal(0., 1., (BATCH_SHAPE[0], LATENT_SPACE_DIM))})
             if c == np.inf or c == np.nan:
-                print('KL blowup. Terminating process.')
-                quit()
-            if _step == 1 and _epoch%10 == 0:
+                print('Representation error. Breaking loop.')
+                return
+            if _step == 1 and (_epoch%10 == 1 or _epoch == 0):
                 write_test_performance(_epoch, it, sess, train_nlevel)
-        _epoch, _step = 0, 0
         write_test_performance('final', it, sess, train_nlevel)
 
 
@@ -153,4 +149,5 @@ if __name__ == '__main__':
         print('Noise level: {}'.format(noise_level))
         for i in range(3):
             print('Iteration: {}'.format(i))
+            _epoch, _step = 0, 0
             train(noise_level, i)

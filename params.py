@@ -8,4 +8,6 @@ TRAINING_EPOCHS = sum(EPOCH_GROUPS)
 NOISE_STEP = .02
 NOISE_BOUND = .501
 LOG_FILE = 'log.csv'
-BETA = 1000  # weighting coefficient for reconstruction error term
+ALPHA = 1.0  # standard error of the distribution from which r's entries are drawn--should be contained in [0, 1]
+BETA = 100  # weighting coefficient for reconstruction error term
+WRITE_EPOCHS = [0, 1, 2, 3, 6, 11, 21, 31]

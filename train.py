@@ -32,8 +32,8 @@ def inject_noise(batch, level):
 train_images = np.load('train_images.npy')
 test_images = np.load('test_images.npy')
 f = plt.figure()
-plt.imsave('image.png', test_images[2], cmap=plt.get_cmap('gray'))
-plt.imsave('max_noise_image.png', inject_noise(test_images[2], NOISE_BOUND), cmap=plt.get_cmap('gray'))
+plt.imsave('{}image.png'.format(IMAGE_DIR), test_images[2], cmap=plt.get_cmap('gray'))
+plt.imsave('{}max_noise_image.png'.format(IMAGE_DIR), inject_noise(test_images[2], MAX_N_LEVEL), cmap=plt.get_cmap('gray'))
 plt.close(f)
 test_images = np.reshape(test_images, (len(test_images), -1))
 test_shape = np.shape(test_images)
@@ -70,16 +70,16 @@ x = tf.placeholder(tf.float64, BATCH_SHAPE, name='x')
 means, standard_errors = dvae.encode(x_noisy)
 variances = tf.square(standard_errors)
 
-r = tf.placeholder(tf.float64, (BATCH_SHAPE[0], LATENT_SPACE_DIM))
+r = tf.placeholder(tf.float64, (BATCH_SIZE, LATENT_SPACE_DIM))
 z = tf.add(tf.multiply(r, standard_errors), means)
 
-ones = tf.constant(np.ones(LATENT_SPACE_DIM), dtype=tf.float64)
+ones = tf.ones((BATCH_SIZE, LATENT_SPACE_DIM), dtype=tf.float64)
 half = tf.constant(.5, dtype=tf.float64)
-reconst_error = tf.cast(tf.losses.mean_squared_error(dvae.decode(z), x), tf.float64)  # problem lies somewhere here!
+reconst_error = tf.multiply(tf.cast(tf.losses.mean_squared_error(dvae.decode(z), x), tf.float64),
+                            tf.constant(np.product(BATCH_SHAPE), dtype=tf.float64))
 kl_divergence = tf.scalar_mul(half, tf.reduce_sum(
-    tf.subtract(tf.subtract(tf.add(variances, means), tf.log(variances)), ones)))
-cost = reconst_error
-#cost = tf.add(tf.multiply(reconst_error, beta), kl_divergence)
+    tf.subtract(tf.subtract(tf.add(variances, tf.square(means)), tf.log(variances)), ones)))
+cost = tf.add(tf.multiply(reconst_error, beta), kl_divergence)
 learning_rate = tf.placeholder(dtype=tf.float64, shape=(), name='learning_rate')
 train_step = tf.train.GradientDescentOptimizer(learning_rate=learning_rate).minimize(cost)
 
@@ -92,9 +92,11 @@ test_variances = tf.square(test_standard_errors)
 t_r = tf.placeholder(tf.float64, (test_shape[0], LATENT_SPACE_DIM))
 t_z = tf.add(tf.multiply(t_r, test_standard_errors), test_means)
 
-t_reconst_error = tf.cast(tf.losses.mean_squared_error(dvae.decode(t_z), test_noiseless), tf.float64)
+t_ones = tf.ones((test_shape[0], LATENT_SPACE_DIM), dtype=tf.float64)
+t_reconst_error = tf.multiply(tf.cast(tf.losses.mean_squared_error(dvae.decode(t_z), test_noiseless), tf.float64),
+                              tf.constant(np.product(test_shape), dtype=tf.float64))
 t_kl_divergence = tf.scalar_mul(half, tf.reduce_sum(
-    tf.subtract(tf.subtract(tf.add(test_variances, test_means), tf.log(test_variances)), ones)))
+    tf.subtract(tf.subtract(tf.add(test_variances, tf.square(test_means)), tf.log(test_variances)), t_ones)))
 t_cost = tf.add(tf.multiply(t_reconst_error, beta), t_kl_divergence)
 
 demo_rep = tf.slice(t_z, (2, 0), (1, LATENT_SPACE_DIM))
@@ -108,7 +110,7 @@ def save_demo_image(fname, pixels):
 
 
 def write_test_performance(ep, it, sess, train_nlevel):
-    for test_nlevel in np.arange(0., NOISE_BOUND, NOISE_STEP):
+    for test_nlevel in np.arange(0., MAX_N_LEVEL, NOISE_STEP):
         _rec_er_, _kl_, _t_cst_, _demo_, d_r_ = sess.run(
             [t_reconst_error, t_kl_divergence, t_cost, demo_image, demo_rep],
             feed_dict={test_noisy: inject_noise(test_images, test_nlevel),
@@ -117,7 +119,7 @@ def write_test_performance(ep, it, sess, train_nlevel):
         with open(LOG_FILE, 'a') as file:
             file.write('{} {}, {}, {}, {}, {}, {}\n'
                        .format(train_nlevel, it, test_nlevel, ep, _rec_er_, _kl_, _t_cst_))
-        save_demo_image('{}.{}.{}'.format(ep, it, test_nlevel, train_nlevel), _demo_)
+        save_demo_image('{}{}.{}.{}'.format(IMAGE_DIR, ep, it, test_nlevel, train_nlevel), _demo_)
 
 
 def train(train_nlevel, it):
@@ -131,9 +133,9 @@ def train(train_nlevel, it):
             noisy_input, noiseless_input = b
             c, _, ms, srs = sess.run([cost, train_step, means, standard_errors],
                             feed_dict={x_noisy: noisy_input, x: noiseless_input, learning_rate: get_learning_rate(),
-                                       r: normal(loc=0., scale=ALPHA, size=(BATCH_SHAPE[0], LATENT_SPACE_DIM))})
+                                       r: normal(loc=0., scale=ALPHA, size=(BATCH_SIZE, LATENT_SPACE_DIM))})
             if c == np.inf or c == np.nan:
-                print('Representation error. Breaking loop.')
+                print('Computation error encountered. Breaking loop.')
                 return
             if _step == 1 and _epoch in WRITE_EPOCHS:
                 write_test_performance(_epoch, it, sess, train_nlevel)
@@ -144,7 +146,7 @@ if __name__ == '__main__':
     with open(LOG_FILE, 'w') as file:
         file.write('training noise-level and iteration, test noise-level, epoch, reconstruction error, kl-divergence, '
                    'cost\n')
-    for noise_level in np.arange(0., NOISE_BOUND, NOISE_STEP):
+    for noise_level in np.arange(0., MAX_N_LEVEL, NOISE_STEP):
         print('Noise level: {}'.format(noise_level))
         for i in range(3):
             print('Iteration: {}'.format(i))

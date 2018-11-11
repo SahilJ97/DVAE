@@ -29,8 +29,8 @@ def inject_noise(batch, level):
     return noisy
 
 
-train_images = np.load('train_images.npy')
-test_images = np.load('test_images.npy')
+train_images = np.load(TRAIN_IMAGES)
+test_images = np.load(TEST_IMAGES)
 f = plt.figure()
 plt.imsave('{}image.png'.format(IMAGE_DIR), test_images[2], cmap=plt.get_cmap('gray'))
 plt.imsave('{}max_noise_image.png'.format(IMAGE_DIR), inject_noise(test_images[2], MAX_N_LEVEL), cmap=plt.get_cmap('gray'))

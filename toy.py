@@ -12,7 +12,7 @@ if __name__ == '__main__':
         image = np.zeros(28*28)
         for j in range(LATENT_SPACE_DIM):
             for k in range(10*j, 10*j + 10):
-                image[k] += latent[j]  # no, need to make it a function!
+                image[k] += latent[j]
         train = np.append(train, [np.reshape(image, (28, 28))], axis=0)
     print(np.shape(train))
     np.save('toy_train', train)
